@@ -35,6 +35,8 @@ const startingObservations:Observation[] = [
 const EMPTY_S:SpecimenDraft = {name:'',scientific_name:'',kingdom:'Flora',status:'Active',zone:''};
 const EMPTY_O:ObservationDraft = {specimen_id:'',type:'Temperature',value:'',unit:'°C',notes:''};
 const STORE = 'bio-system-local-demo-v3';
+const WORKSPACE_KEY = 'bio-system-cloud-workspace-key-v1';
+function newWorkspaceKey(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
 function loadLocal():{specimens:Specimen[];observations:Observation[]} {
  try{const raw=localStorage.getItem(STORE);if(raw){const parsed=JSON.parse(raw);if(Array.isArray(parsed.specimens)&&Array.isArray(parsed.observations))return parsed;}}catch{}
  return {specimens:startingSpecimens,observations:startingObservations};
@@ -85,14 +87,21 @@ export default function App(){
   setSpecimens(state.specimens);setObservations(state.observations);
  }
  async function connect(secret:string){
-  if(!secret.trim()){setNotice('Enter your application access token.');return;}
+  if(!/^[a-f0-9]{64}$/i.test(secret.trim())){setNotice('Enter a valid 64-character private workspace recovery key.');return;}
   setBusy(true);
-  try{await refresh(secret.trim());sessionStorage.setItem('bio-system-access-token',secret.trim());setToken(secret.trim());setTokenInput('');setMode('live');setView('overview');setNotice('Connected to Cloudflare D1.');}
+  try{await refresh(secret.trim());localStorage.setItem(WORKSPACE_KEY,secret.trim());sessionStorage.setItem('bio-system-access-token',secret.trim());setToken(secret.trim());setTokenInput('');setMode('live');setView('overview');setNotice('Connected to your private Cloudflare D1 workspace.');}
   catch(error){setNotice(error instanceof Error?error.message:'Connection failed');}
   finally{setBusy(false);}
  }
  useEffect(()=>{
-  fetch('/api/health').then(r=>r.json()).then(data=>{setBackend(Boolean(data.configured));const saved=sessionStorage.getItem('bio-system-access-token');if(saved&&data.configured)void connect(saved);}).catch(()=>setBackend(false));
+  fetch('/api/health').then(r=>r.json()).then(data=>{
+    setBackend(Boolean(data.configured));
+    if(data.configured){
+      const old=localStorage.getItem(WORKSPACE_KEY)||sessionStorage.getItem('bio-system-access-token');
+      const key=old&&/^[a-f0-9]{64}$/i.test(old)?old:newWorkspaceKey();
+      void connect(key);
+    }
+  }).catch(()=>setBackend(false));
  },[]);
  useEffect(()=>{if(mode==='demo'){try{localStorage.setItem(STORE,JSON.stringify({specimens,observations}));}catch{}}},[mode,specimens,observations]);
  function newSpecimen(){setDraftS({...EMPTY_S});setModal('specimen');}
@@ -119,7 +128,16 @@ export default function App(){
  }
  function exportSpecimens(){exportCsv('bio-system-specimens.csv',[['ID','Name','Scientific name','Kingdom','Status','Zone','Created'],...specimens.map(s=>[s.id,s.name,s.scientific_name,s.kingdom,s.status,s.zone,s.created_at])]);}
  function exportObservations(){exportCsv('bio-system-observations.csv',[['ID','Specimen','Type','Value','Unit','Notes','Recorded'],...observations.map(o=>[o.id,byId.get(o.specimen_id)||o.specimen_id,o.type,o.value,o.unit,o.notes,o.observed_at])]);}
- function disconnect(){sessionStorage.removeItem('bio-system-access-token');setToken('');setMode('demo');const local=loadLocal();setSpecimens(local.specimens);setObservations(local.observations);setNotice('Disconnected. Local demo mode restored.');}
+ function disconnect(){
+   if(!window.confirm('Switch to local demo mode? First copy your workspace recovery key to regain access later.'))return;
+   localStorage.removeItem(WORKSPACE_KEY);sessionStorage.removeItem('bio-system-access-token');
+   setToken('');setMode('demo');const local=loadLocal();setSpecimens(local.specimens);setObservations(local.observations);
+   setNotice('Disconnected. Save your recovery key before leaving a cloud workspace.');
+ }
+ async function copyWorkspaceKey(){
+   try{await navigator.clipboard.writeText(token);setNotice('Private recovery key copied. Store it securely to access your records from another device.');}
+   catch{setNotice('Could not copy automatically. Check your browser clipboard permissions.');}
+ }
  const buttonAdd=<button className="button primary" onClick={newSpecimen}><Plus size={16}/> Add specimen</button>;
  return <div className="shell">
   <aside className={'sidebar '+(menuOpen?'open':'')}>
@@ -136,7 +154,7 @@ export default function App(){
    <div className="content">
     {view==='overview'&&<>
      <Head eyebrow="COMMAND CENTER / OVERVIEW" title="A living system, at a glance." description="Organize specimens, record observations, and keep research in view." actions={buttonAdd}/>
-     {mode==='demo'&&<div className="banner"><CircleAlert size={18}/><span><strong>Sample workspace.</strong> These records are illustrative, not live sensors. Edits stay in this browser.</span><button onClick={()=>setView('settings')}>Connect D1 <ArrowRight size={15}/></button></div>}
+     {mode==='demo'&&<div className="banner"><CircleAlert size={18}/><span><strong>Sample workspace.</strong> These records are illustrative, not live sensors. Cloud storage connects automatically when available.</span><button onClick={()=>setView('settings')}>Connect D1 <ArrowRight size={15}/></button></div>}
      <div className="hero"><div className="hero-copy"><span className="eyebrow">● ECOSYSTEM INTELLIGENCE</span><h2>Your ecosystem.<br/><em>Beautifully observed.</em></h2><p>One workspace for biological assets, field notes and habitat health.</p><button onClick={newObservation}>Record an observation <ArrowRight size={17}/></button></div><div className="orbital"><div className="orbit first"/><div className="orbit second"/><div className="orbit third"/><div className="nucleus"><Dna size={55}/></div><span className="orbit-dot dot1"/><span className="orbit-dot dot2"/></div><span className="hero-footer">01 / BIOLOGICAL OBSERVABILITY</span></div>
      <div className="metrics">{[
       {label:'Tracked specimens',value:specimens.length,detail:'Across '+kingdomCounts.length+' groups',icon:Dna,color:'mint'},
@@ -172,7 +190,7 @@ export default function App(){
     </>}
     {view==='settings'&&<>
      <Head eyebrow="PREFERENCES / CONNECTION" title="Workspace settings" description="Control storage, session access, exports, and sample data."/>
-     <div className="settings-grid"><section className="panel settings-card"><span className="eyebrow">CLOUDFLARE CONNECTION</span><h3>Storage & authentication</h3><p>Cloudflare D1 is the persistent database. The API requires a private application token.</p><div className="connection"><span><Lock size={22}/></span><div><strong>{mode==='live'?'Cloudflare D1 connected':backend?'Backend available':'Demo only'}</strong><small>{mode==='live'?'Reads and writes are persistent':backend?'Enter the token to connect':'Configure GitHub secrets to deploy the API'}</small></div></div>{mode==='live'?<button className="button outline full" onClick={disconnect}><LogOut size={16}/> Disconnect</button>:<form onSubmit={e=>{e.preventDefault();void connect(tokenInput);}}><label>Application access token<input type="password" className="field" autoComplete="off" value={tokenInput} onChange={e=>setTokenInput(e.target.value)} placeholder="Paste the private app token" /></label><small className="helper">Stored in sessionStorage for this browser tab, never bundled into the app.</small><button className="button primary full" type="submit" disabled={busy||!tokenInput.trim()}><ShieldCheck size={16}/>{busy?'Connecting…':'Connect to Cloudflare'}</button></form>}</section><section className="panel settings-card"><span className="eyebrow">DATA MANAGEMENT</span><h3>Export & local data</h3><p>Download research records as CSV. Reset only affects the browser demonstration.</p><div className="settings-buttons"><button onClick={exportSpecimens}><Database size={17}/> Export specimens <ArrowDownToLine size={16}/></button><button onClick={exportObservations}><FlaskConical size={17}/> Export observations <ArrowDownToLine size={16}/></button>{mode==='demo'&&<button className="danger" onClick={()=>{if(window.confirm('Reset your local demo data?')){setSpecimens(startingSpecimens);setObservations(startingObservations);setNotice('Local demo reset.');}}}><RefreshCw size={17}/> Reset sample workspace <ArrowRight size={16}/></button>}</div></section></div><div className="hint"><ShieldCheck size={17}/> Free-tier Workers and D1, with GitHub Actions. This registry is not a medical diagnostic tool or a live sensor integration.</div>
+     <div className="settings-grid"><section className="panel settings-card"><span className="eyebrow">CLOUDFLARE CONNECTION</span><h3>Storage & authentication</h3><p>Cloudflare D1 stores private workspaces protected by unique 256-bit recovery keys automatically generated in your browser.</p><div className="connection"><span><Lock size={22}/></span><div><strong>{mode==='live'?'Cloudflare D1 connected':backend?'Backend available':'Demo only'}</strong><small>{mode==='live'?'Reads and writes are persistent':backend?'Your workspace key is generated automatically':'Configure the Cloudflare Worker and D1 database'}</small></div></div><div className="settings-buttons">{mode==='live'&&<button type="button" onClick={()=>void copyWorkspaceKey()}><ShieldCheck size={17}/> Copy private recovery key <ArrowDownToLine size={16}/></button>}{mode==='live'&&<button type="button" className="danger" onClick={disconnect}><LogOut size={17}/> Switch to local demo <ArrowRight size={16}/></button>}</div><form onSubmit={e=>{e.preventDefault();void connect(tokenInput);}}><label>Restore another workspace using its recovery key<input type="password" className="field" autoComplete="off" value={tokenInput} onChange={e=>setTokenInput(e.target.value)} placeholder="Paste your 64-character workspace key" /></label><small className="helper">Keep your recovery key private. Losing it means losing access to that cloud workspace.</small><button className="button primary full" type="submit" disabled={busy||!tokenInput.trim()}><ShieldCheck size={16}/>{busy?'Connecting…':'Open private workspace'}</button></form></section><section className="panel settings-card"><span className="eyebrow">DATA MANAGEMENT</span><h3>Export & local data</h3><p>Download research records as CSV. Reset only affects the browser demonstration.</p><div className="settings-buttons"><button onClick={exportSpecimens}><Database size={17}/> Export specimens <ArrowDownToLine size={16}/></button><button onClick={exportObservations}><FlaskConical size={17}/> Export observations <ArrowDownToLine size={16}/></button>{mode==='demo'&&<button className="danger" onClick={()=>{if(window.confirm('Reset your local demo data?')){setSpecimens(startingSpecimens);setObservations(startingObservations);setNotice('Local demo reset.');}}}><RefreshCw size={17}/> Reset sample workspace <ArrowRight size={16}/></button>}</div></section></div><div className="hint"><ShieldCheck size={17}/> Free-tier Workers and D1, with GitHub Actions. Workspace keys are stored locally in your browser. This is not a medical diagnostic tool.</div>
     </>}
    </div>
   </main>
