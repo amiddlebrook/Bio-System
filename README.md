@@ -1,73 +1,81 @@
-# Bio-System
+# Bio-System — Cloudflare-native research workspace
 
-## Biological research operations, rebuilt for Cloudflare
+Bio-System is a responsive biological specimen and observation registry. The rebuilt UI replaces the original nonfunctional mock telemetry with real CRUD operations, observations, charts and CSV exports.
 
-Bio-System is a responsive specimen registry, observation log, and research analytics workspace. The previous version was a Vite visual mockup with invented metrics, fixed desktop navigation, and GitHub Pages deployment. This version introduces persistent Cloudflare D1 storage, a protected Worker API, and a complete interface for managing actual research records.
+**Live app:** https://bio-system.averymiddlebrook2014.workers.dev
 
-### What works
+## Features
+- Cloudflare Workers hosts the frontend and API on the same origin
+- Cloudflare D1 stores specimens and observations
+- Specimen search, classification, status updates, deletion and CSV export
+- Timestamped temperature, humidity, growth, pH and note observations
+- Charts and KPIs derived from real saved records
+- Secure random, per-workspace **recovery keys** generated in the browser; no login or additional API access secret required
+- Private, independent record sets scoped to SHA-256 hashes of workspace keys
+- Automatic, idempotent D1 provisioning and schema migrations with Wrangler
+- GitHub Actions CI/CD: tests on pull requests, deploy on pushes to master
+- Fully functional local demo mode when Cloudflare is unavailable
 
-- Create, search, filter, reclassify, and delete specimens
-- Record or delete timestamped observations (temperature, humidity, pH, growth, notes)
-- Derived metrics and charts that recalculate from records
-- Export specimens and observations to CSV, with spreadsheet-formula injection protection
-- Desktop and mobile UI; responsive sidebar, forms, tables and charts
-- Clearly marked demo mode, persistent locally in browser storage
-- Same-origin Cloudflare Worker API with bearer token authentication
-- D1 SQL schema, migrations, and regression smoke tests
-- GitHub Actions quality checks on PRs and deployment from master
+## $0 installation / deployment
 
-No fake live sensor readings are presented as real data. Example data only appears in clearly labeled demo mode.
+Requires a free Cloudflare Workers + D1 account and GitHub Actions. Free tiers have usage caps; no paid subscriptions or per-request model API are required.
 
-## 100% free infrastructure
+Repository secrets under Settings > Secrets and variables > Actions:
 
-React 19, Vite 6, and vanilla CSS compile to static assets served by Cloudflare Workers. The Worker serves authenticated API endpoints. Cloudflare D1 stores the application state, and GitHub Actions builds, tests, migrates, and deploys. No paid third-party API, hosted server, or subscription is required for usage within the free quotas. Cloudflare free usage limits still apply.
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`: a scoped token with Workers Scripts edit and D1 edit rights
 
-### Running locally
+**That's all.** Pushing to master automatically:
+1. Installs dependencies and runs the TypeScript check, Worker API tests and Vite build.
+2. Uses `wrangler d1 list --json` to discover a database named `bio-system`, creating it with `wrangler d1 create bio-system` when absent.
+3. Injects its UUID into an ignored generated config, never requiring a `D1_DATABASE_ID` secret.
+4. Applies `migrations/` to the remote D1.
+5. Deploys the Worker and static UI to the workers.dev subdomain.
 
-Node 22 or newer is recommended.
+The workflow is idempotent: subsequent deployments reuse the database and preserve records.
 
-1. Install packages: npm ci
-2. Start the frontend: npm run dev
-3. Open http://localhost:3000 for the fully functional local demo.
-4. Optional: For local D1 API development, run npx wrangler@4.45.0 d1 migrations apply DB --local and npx wrangler@4.45.0 dev. Vite proxies API calls to port 8787.
-5. For local API authentication, create an ignored .dev.vars file containing APP_ACCESS_TOKEN=your_private_random_token.
-6. Validate: npx tsc --noEmit; node --test tests/*.test.mjs; npm run build.
+## Private workspace keys
 
-The zero UUID in versioned wrangler.jsonc is exclusively for local development. Production uses a generated Wrangler config that receives the actual D1 database ID from GitHub Secrets.
+On first visit, the browser generates a random 256-bit key using `crypto.getRandomValues`. It is stored in localStorage and sent as a bearer token to your Cloudflare Worker over HTTPS. The Worker hashes the key with SHA-256 and uses the hash to isolate that workspace's records in D1.
 
-### One-time production setup
+In Settings, click **Copy private recovery key** and store it somewhere safe. To open the same records from a different browser/device, paste that key into **Restore another workspace**. If you lose the key and clear browser storage, you cannot regain access to the workspace; there is no central user account or password reset. Keep the key private. Anyone with it can read, edit and delete the associated workspace records. Do not use this app for patient information or other sensitive regulated data.
 
-1. Create a free Cloudflare account with Workers enabled and a free workers.dev subdomain.
-2. Create a D1 database named bio-system. Run npx wrangler@4.45.0 d1 create bio-system after logging in with Wrangler, or use the Cloudflare dashboard.
-3. Copy the generated D1 database UUID.
-4. Create a scoped Cloudflare API token that can edit Workers and D1 resources in your account. Keep it secret.
-5. Open repository Settings > Secrets and variables > Actions. Create four repository secrets:
+This capability-key model eliminates the additional `BIO_SYSTEM_ACCESS_TOKEN` setup required by the previous revision. Because the public Worker permits creating isolated workspaces without registration, free-tier D1 usage may be depleted by abuse; this is an availability risk, not an unlimited-cost service. Per-workspace record caps and API payload limits help but are not global rate limits.
 
-| Secret | Value |
-| --- | --- |
-| CLOUDFLARE_API_TOKEN | Scoped Cloudflare API deployment token |
-| CLOUDFLARE_ACCOUNT_ID | Cloudflare account identifier |
-| D1_DATABASE_ID | UUID of the bio-system D1 database |
-| BIO_SYSTEM_ACCESS_TOKEN | A new strong random application password/token, preferably 32+ random bytes |
+## Development
 
-6. Merge the restoration pull request into master or run the Cloudflare production deployment workflow manually. It typechecks, tests, builds, migrates D1, deploys the Worker with assets, and sets APP_ACCESS_TOKEN as a Worker secret.
-7. Open the workers.dev deployment URL printed by the workflow. In Workspace settings, enter the BIO_SYSTEM_ACCESS_TOKEN value and connect.
+Requires Node.js 22+.
 
-**Security:** Do not store secrets in repository source or Vite variables. The deploy workflow passes the app token as a GitHub Actions secret and writes it to Cloudflare through Wrangler. The browser keeps the access token only in tab-level sessionStorage. The API rejects anonymous requests except its minimal /api/health endpoint. No CORS allowlist is added for other origins.
+```bash
+npm ci
+npm run dev
+```
 
-### Project organization
+Open http://localhost:3000 for demo mode. To test the Worker and D1 locally, run:
 
-- App.tsx and styles.css — complete responsive application
-- worker/index.js — authenticated API and validations
-- migrations/0001_initial.sql — SQL schema and indexes
-- wrangler.jsonc — Cloudflare Worker Assets and D1 binding template
-- scripts/prepare-config.mjs — injects D1 UUID at deploy time
-- tests/api.test.mjs — API security and response smoke tests
-- .github/workflows/ci.yml — PR tests
-- .github/workflows/deploy.yml — Cloudflare production automation
+```bash
+npx wrangler@4.45.0 d1 migrations apply DB --local
+npx wrangler@4.45.0 dev
+```
 
-### Limitations
+Vite proxies `/api` calls to the local Worker on port 8787. Run checks:
 
-The Cloudflare account, API token, D1 database, and GitHub Actions secrets must be provisioned by an account administrator before the first real deployment. This repository alone cannot create credentials or prove live production availability.
+```bash
+npx tsc --noEmit
+node --test tests/*.test.mjs
+npm run build
+```
 
-This is a research-specimen tracking tool, not a medical or health information system. Do not enter patient information or other sensitive personal records. A single shared token is appropriate only for a small trusted environment. For public or multi-user deployments, add Cloudflare Access, individual identities, and appropriate authorization before inviting users.
+The committed `wrangler.jsonc` has a placeholder D1 UUID for local use; production uses a generated `wrangler.deploy.json` which is ignored by git.
+
+## Architecture and limitations
+
+- `App.tsx`, `styles.css`: React interface
+- `worker/index.js`: capability-token-authenticated API
+- `migrations/0001_initial.sql`: baseline database schema
+- `migrations/0002_workspace_scoping.sql`: scoped workspace data
+- `scripts/prepare-config.mjs`: idempotent Wrangler D1 provisioning
+- `.github/workflows/deploy.yml`: one-push deployment
+- `.github/workflows/ci.yml`: tests and build on PRs
+
+This is a small research operations app, not a live sensor platform or a clinical health records system. Deployed storage is on Cloudflare's free tier with daily and total resource limits.
